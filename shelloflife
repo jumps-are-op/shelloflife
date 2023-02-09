@@ -1,0 +1,469 @@
+#!/bin/sh -ue
+
+# Made by jumps are op
+# This software is under GPL version 3 and comes with ABSOLUTELY NO WARRANTY
+
+# Every cell have its own structure which look like this
+# CELLS_${y}x${x}_STATE -> cell's state
+# CELLS_${y}x${x}_NEIGHBORS -> cell's neighbors
+# Get cell -> $((CELLS_${y}x${x}_STATE))
+# Set cell -> $((CELLS_${y}x${x}_STATE=STATE))
+# Use 1 for live and 0 for dead
+# If you found a faster way please send to jumpsareop@gmail.com
+# NOTE: It's possible that making the map as a long string then
+# NOTE: using sed to manpulate text is faster.
+
+main(){
+	# Configurations
+	# shellcheck disable=SC2034
+	{
+		# change this to hjkl if you are a normal QWERTY user
+		: "${CONFIG_KEY_left:=y}${CONFIG_KEY_down:=n}" \
+			"${CONFIG_KEY_up:=e}${CONFIG_KEY_right:=o}" \
+			"${CONFIG_KEY_arrow_left:=[D}${CONFIG_KEY_arrow_down:=[B}" \
+			"${CONFIG_KEY_arrow_up:=[A}${CONFIG_KEY_arrow_right:=[C}" \
+			"${CONFIG_KEY_switch:= }${CONFIG_KEY_normal:=}" \
+			"${CONFIG_KEY_angel:=v}${CONFIG_KEY_killer:=V}" \
+			"${CONFIG_KEY_step:=r}${CONFIG_KEY_run=R}" \
+			"${CONFIG_KEY_info:=i}${CONFIG_KEY_help:=?}${CONFIG_KEY_quit:=q}" \
+			"${CONFIG_CHAR_cursor:=X}${CONFIG_CHAR_horizontal:=|}" \
+			"${CONFIG_CHAR_vertical:=-}${CONFIG_CHAR_cornor:=+}" \
+			"${CONFIG_CHAR_msgopen:=[ }${CONFIG_CHAR_msgclose:= ]}"
+	}
+	lastmsgbuf="" refresh="" chcount=
+
+	errmsg=
+	displaytitle "[ shell of life - Press ? for help ]"
+	oldstty=$(stty -g)
+	trap 'stty "$oldstty"; printf "[?1049l[?25h";
+		[ "$errmsg" ] && { echo "$errmsg"; exit 1;}; exit' EXIT INT
+	trap 'redraw "$currentmap" cursory cursorx' WINCH
+	stty -echo -icanon
+
+	printf "[?1049h[?25l[H[J"
+
+	currentmap=CELLS1 nextmap=CELLS2
+	cursory=-1 cursorx=-1
+	redraw "$currentmap" cursory cursorx
+
+	# shellcheck disable=SC2034,SC2153
+	CELLS2_HEIGHT=$CELLS1_HEIGHT CELLS2_WIDTH=$CELLS1_WIDTH
+	initmap "$nextmap"
+	# shellcheck disable=SC2034,SC2153
+	EMPTY_HEIGHT=$CELLS1_HEIGHT EMPTY_WIDTH=$CELLS1_WIDTH
+	initmap EMPTY
+
+	setcurserpersonality normal
+	displaycursor "$currentmap" "$CONFIG_CHAR_cursor" "$cursory" "$cursorx"
+	lastcursory=$cursory lastcursorx=$cursorx
+
+	addtomsgbuf "INFO:" "CURSOR:" "${cursory}x$cursorx"
+	flushmsgbuf
+
+	info=0 reinittraps=$(trap)
+
+	while input=$(dd count=1 2>/dev/null; echo .);do
+		addtomsgbuf "INFO:"
+		input=${input%.}
+		validinput=
+		case $input in
+			"$CONFIG_KEY_arrow_left"|"$CONFIG_KEY_left"*)
+				cursorx=$(((cursorx != 0 ? cursorx : ${currentmap}_WIDTH)-1))
+				validinput=1
+			;;
+			"$CONFIG_KEY_arrow_down"|"$CONFIG_KEY_down"*)
+				cursory=$(((cursory+1)%${currentmap}_HEIGHT))
+				validinput=1
+			;;
+			"$CONFIG_KEY_arrow_up"|"$CONFIG_KEY_up"*)
+				cursory=$(((cursory != 0 ? cursory : ${currentmap}_HEIGHT)-1))
+				validinput=1
+			;;
+			"$CONFIG_KEY_arrow_right"|"$CONFIG_KEY_right"*)
+				cursorx=$(((cursorx+1)%${currentmap}_WIDTH))
+				validinput=1
+			;;
+			"$CONFIG_KEY_switch"*)
+				if [ $((${currentmap}_${cursory}x${cursorx}_STATE)) = 1 ];then
+					: $((${currentmap}_${cursory}x${cursorx}_STATE=0))
+					chneb "$currentmap" "$cursory" "$cursorx" -1
+					chcount=-1
+				else
+					: $((${currentmap}_${cursory}x${cursorx}_STATE=1))
+					chneb "$currentmap" "$cursory" "$cursorx" 1
+					chcount=1
+				fi
+				displaycursor "$currentmap" \
+					"$CONFIG_CHAR_cursor" "$cursory" "$cursorx"
+				validinput=1
+			;;
+			"$CONFIG_KEY_normal"*)
+				setcurserpersonality normal
+				displaycursor "$currentmap" \
+					"$CONFIG_CHAR_cursor" "$cursory" "$cursorx"
+				validinput=1
+			;;
+			"$CONFIG_KEY_killer"*)
+				if [ $((${currentmap}_${cursory}x${cursorx}_STATE)) = 1 ];then
+					: $((${currentmap}_${cursory}x${cursorx}_STATE=0))
+					chneb "$currentmap" "$cursory" "$cursorx" -1
+					chcount=-1
+				fi
+				setcurserpersonality killer
+				displaycursor "$currentmap" \
+					"$CONFIG_CHAR_cursor" "$cursory" "$cursorx"
+				validinput=1
+			;;
+			"$CONFIG_KEY_angel"*)
+				if [ $((${currentmap}_${cursory}x${cursorx}_STATE)) != 1 ];then
+					: $((${currentmap}_${cursory}x${cursorx}_STATE=1))
+					chneb "$currentmap" "$cursory" "$cursorx" 1
+					chcount=1
+				fi
+				setcurserpersonality angel
+				displaycursor "$currentmap" \
+					"$CONFIG_CHAR_cursor" "$cursory" "$cursorx"
+				validinput=1
+			;;
+			"$CONFIG_KEY_step")
+				nextmap "$currentmap" "$nextmap"
+				if [ "$currentmap" = CELLS1 ];then
+					nextmap=CELLS1
+					currentmap=CELLS2
+				else
+					nextmap=CELLS2
+					currentmap=CELLS1
+				fi
+				refresh=1
+				validinput=1
+			;;
+			"$CONFIG_KEY_run"*)
+				displaytitle "[ shell of life - Press CTRL+C to stop ]"
+				refreshtitle
+				[ "$info" = 0 ] && clearmsgarea
+				setasmsgbuf
+				trap 'stop=1; break' INT
+				stop=
+				while [ ! "$stop" ];do
+					nextmap "$currentmap" "$nextmap"
+					if [ "$currentmap" = CELLS1 ];then
+						nextmap=CELLS1
+						currentmap=CELLS2
+					else
+						nextmap=CELLS2
+						currentmap=CELLS1
+					fi
+					[ "$info" != 0 ] &&
+					addtomsgbuf "INFO:" \
+						"LIVE_CELLS:" "$(countlivecells "$currentmap")" &&
+					flushmsgbuf
+					displaymap "$currentmap"
+				done
+				displaytitle "[ shell of life - Press ? for help ]"
+				refreshtitle
+				setasmsgbuf "INFO:"
+				eval " $reinittraps"
+				refresh=1
+				validinput=1
+			;;
+			"$CONFIG_KEY_info"*)info=$((!info)) validinput=1;;
+			"$CONFIG_KEY_help"*)dishelp "$currentmap"; validinput=1;;
+			"$CONFIG_KEY_quit"*|"")exit 0;;
+		esac
+		[ "$info" != 0 ] &&
+			addtomsgbuf "LIVE_CELLS: $(countlivecells "$currentmap")"
+		chcount=
+
+		addtomsgbuf "INPUT:"
+		case $input in
+			" ")addtomsgbuf SPC;;
+			"	")addtomsgbuf TAB;;
+			""|'
+')addtomsgbuf RET;;
+			"")addtomsgbuf ESC;;
+			*)addtomsgbuf "\"$(printf %s "$input" | tr '[:cntrl:]' '?')\"";;
+		esac
+		[ ! "$validinput" ] && addtomsgbuf "(Invalid input)"
+
+		[ "$refresh" ] &&
+			displaymap "$currentmap" &&
+			displaycursor "$currentmap" \
+				"$CONFIG_CHAR_cursor" "$cursory" "$cursorx" &&
+			refresh=
+
+
+		[ "$lastcursory" != "$cursory" ] || [ "$lastcursorx" != "$cursorx" ] &&
+		{
+			case $curserpersonality in
+			killer)
+			if [ $((${currentmap}_${cursory}x${cursorx}_STATE)) = 1 ];then
+				: $((${currentmap}_${cursory}x${cursorx}_STATE=0))
+				chneb "$currentmap" "$cursory" "$cursorx" -1
+				chcount=-1
+			fi
+			;;
+			angel)
+			if [ $((${currentmap}_${cursory}x${cursorx}_STATE)) != 1 ];then
+				: $((${currentmap}_${cursory}x${cursorx}_STATE=1))
+				chneb "$currentmap" "$cursory" "$cursorx" 1
+				chcount=1
+			fi
+			esac
+			displaycursor "$currentmap" " " "$lastcursory" "$lastcursorx"
+			displaycursor "$currentmap" \
+				"$CONFIG_CHAR_cursor" "$cursory" "$cursorx"
+		}
+
+		lastcursory=$cursory lastcursorx=$cursorx
+		addtomsgbuf "CURSOR:" "${cursory}x$cursorx"
+		flushmsgbuf
+	done
+}
+
+# $1 = map
+# $2 = cursor Y variable (name)
+# $3 = cursor X variable (name)
+redraw(){
+	printf "[s[H"
+	# Get size
+	size=$(stty size)
+	lines=$((${size% *}-2)) cols=$((${size#* }-2))
+	if [ "$lines" -lt 23 ] || [ "$cols" -lt 78 ];then
+		errmsg="Terminal too small (${cols}x$lines), you need at least 80x25."
+		exit 1
+	fi
+
+	: $(($1_HEIGHT=lines)) $(($1_WIDTH=cols))
+	# shellcheck disable=SC2034,SC2153
+	EMPTY_HEIGHT=$lines EMPTY_WIDTH=$cols
+
+	# Cursor position
+	{ [ $(($2)) = -1 ] || [ $(($3)) = -1 ] &&
+		: $(($2=lines/2)) $(($3=cols/2));} ||
+		: $(($2=$2%lines)) $(($3=$3%cols))
+
+	# Init map cells
+	initmap "$1" "$cols" "$lines"
+	initmap EMPTY "$cols" "$lines"
+
+	# Corners
+	printf %s "$CONFIG_CHAR_cornor"
+	printf %$((cols))s | tr ' ' "$CONFIG_CHAR_vertical"
+	printf %s\\n "$CONFIG_CHAR_cornor"
+	refreshtitle
+	printf "%$((lines))s" |
+	sed "s/ /$CONFIG_CHAR_horizontal[$((cols))C$CONFIG_CHAR_horizontal\n/g"
+	printf "%s%$((cols))s%s" "$CONFIG_CHAR_cornor" "" "$CONFIG_CHAR_cornor" |
+		tr ' ' "$CONFIG_CHAR_vertical"
+
+	# Dedraw the map
+	displaymap "$1"
+	printf "[u"
+}
+
+# $1 = map
+# Here I used $buf as a buffer, because contently calling printf IS SLOW.
+displaymap(){
+	x=0
+	y=0
+	buf="[2;2H"
+	unset lastdisplayed
+	height=$(($1_HEIGHT))
+	width=$(($1_WIDTH))
+	while [ "$y" -lt "$height" ];do
+		while [ "$x" -lt "$width" ];do
+			if [ $(($1_${y}x${x}_STATE)) = 1 ];then
+				buf=$buf${lastdisplayed-[7m}
+				lastdisplayed=
+			else
+				buf=$buf${lastdisplayed+[m}
+				unset lastdisplayed
+			fi
+
+			buf="$buf "
+			x=$((x+1))
+		done
+		y=$((y+1))
+		buf="$buf\n[C"
+		x=0
+	done
+	printf %b "$buf${lastdisplayed+[m}"
+	unset lastdisplayed
+}
+
+# $1 = map
+initmap(){
+	x=0
+	y=0
+	height=$(($1_HEIGHT))
+	width=$(($1_WIDTH))
+	while [ "$y" -lt "$height" ];do
+		while [ "$x" -lt "$width" ];do
+			eval ": \"\${$1_${y}x${x}_STATE=}\" \"\${$1_${y}x${x}_NEIGHBORS=}\""
+			x=$((x+1))
+		done
+		y=$((y+1))
+		x=0
+	done
+}
+
+# $1 = personality
+setcurserpersonality(){ curserpersonality=$1;}
+getcurserpersonality(){ echo "$curserpersonality";}
+
+# $1 = map
+# $2 = cursor
+# $3 = cursor Y
+# $4 = cursor X
+displaycursor(){
+	[ "$2" != " " ] && case $curserpersonality in
+		killer)set -- "$1" "[1;31m$2" "$3" "$4";;
+		angel)set -- "$1" "[1;42m$2" "$3" "$4";;
+	esac
+	[ $(($1_$3x$4_STATE)) = 1 ] &&
+		printf "[$(($3+2));$(($4+2))H[7m%s[m" "$2" ||
+		printf "[$(($3+2));$(($4+2))H%s[m" "$2"
+}
+
+# $1 = map
+# $2 = next map
+nextmap(){
+	x=0
+	y=0
+	height=$(($1_HEIGHT))
+	width=$(($1_WIDTH))
+	: $(($2_HEIGHT=height))
+	: $(($2_WIDTH=width))
+	while [ "$y" -lt "$height" ];do
+		while [ "$x" -lt "$width" ];do
+			: $(($2_${y}x${x}_NEIGHBORS=$1_${y}x${x}_NEIGHBORS))
+			x=$((x+1))
+		done
+		y=$((y+1))
+		x=0
+	done
+
+	x=0
+	y=0
+	while [ "$y" -lt "$height" ];do
+		while [ "$x" -lt "$width" ];do
+			state=$(($1_${y}x${x}_STATE))
+			case $state$(($1_${y}x${x}_NEIGHBORS)) in
+				13): $(($2_${y}x${x}_STATE=1));;
+				03): $(($2_${y}x${x}_STATE=1))
+					# Add 1 to all neighbors
+					chneb "$2" "$y" "$x" 1
+				;;
+				*2): $(($2_${y}x${x}_STATE=state));;
+				1*): $(($2_${y}x${x}_STATE=0))
+					# subtract 1 from all neighbors
+					chneb "$2" "$y" "$x" -1
+				;;
+				*): $(($2_${y}x${x}_STATE=0));;
+			esac
+			x=$((x+1))
+		done
+		y=$((y+1))
+		x=0
+	done
+}
+
+# $1 = map
+countlivecells(){
+	if [ "$chcount" ];then
+		lastcount=$((lastcount+chcount))
+		echo "$lastcount"
+		chcount=
+		return
+	fi
+
+	height=$(($1_HEIGHT)) width=$(($1_WIDTH))
+	live=$(($(set | grep "^$1_[0-9]*x[0-9]*_STATE=" |
+		sed 's/=.*//' | tr '\n' '+' | sed 's/+$//')))
+	echo "$live"
+	lastcount=$live
+}
+
+setasmsgbuf(){ msgbuf=$*;}
+addtomsgbuf(){ msgbuf=${msgbuf:+$msgbuf }"$*";} # $* = message
+clearmsgarea(){
+	printf "[$((lines+2))H%s%$((cols))s%s" \
+		"$CONFIG_CHAR_cornor" \
+		"" \
+		"$CONFIG_CHAR_cornor" | tr ' ' "$CONFIG_CHAR_vertical"
+}
+flushmsgbuf(){
+	[ "$lastmsgbuf" ] && clearmsgarea
+
+	[ "$msgbuf" ] &&
+		printf "[$((lines+2));5H%s%-0.$((cols-9))s%s" \
+		"$CONFIG_CHAR_msgopen" \
+		"$msgbuf" \
+		"$CONFIG_CHAR_msgclose" &&
+		lastmsgbuf=$msgbuf && msgbuf=
+}
+
+displaytitle(){ title=$1;}
+refreshtitle(){
+	printf "[H%s%$((cols))s%s" "$CONFIG_CHAR_cornor" "" \
+		"$CONFIG_CHAR_cornor" | tr ' ' "$CONFIG_CHAR_vertical"
+	printf "[;%sH%s[2;H" $(((cols-${#title})/2+1)) "$title"
+}
+
+# $1 = map
+# $2 = Y
+# $3 = X
+# $4 = number to add/sub
+# shellcheck disable=SC2015
+chneb(){
+	height=$(($1_HEIGHT))
+	width=$(($1_WIDTH))
+
+	: $(($1_$((($2!=0?$2:height)-1))x$((($3!=0?$3:width)-1))_NEIGHBORS+=($4))) \
+		$(($1_$((($2!=0 ?$2:height)-1))x$3_NEIGHBORS+=($4))) \
+		$(($1_$((($2!=0 ?$2:height)-1))x$((($3+1)%width))_NEIGHBORS+=($4))) \
+		$(($1_$2x$((($3 != 0 ? $3 : width)-1))_NEIGHBORS+=($4))) \
+		$(($1_$2x$((($3+1)%width))_NEIGHBORS+=($4))) \
+		$(($1_$((($2+1)%height))x$((($3 != 0 ? $3:width)-1))_NEIGHBORS+=($4))) \
+		$(($1_$((($2+1)%height))x$3_NEIGHBORS+=($4))) \
+		$(($1_$((($2+1)%height))x$((($3+1)%width))_NEIGHBORS+=($4)))
+}
+
+# $1 = map
+dishelp(){
+	displaymap EMPTY
+	displaytitle "[ shell of life ]"
+	refreshtitle
+	clearmsgarea
+	sed 's/^/[C/g' <<-EOF
+		[H
+		Copyright (C) 2023 Jumps are op (jumpsareop@gmail.com)
+
+		This program is free software: you can redistribute it and/or modify
+		it under the terms of the GNU General Public License as published by
+		the Free Software Foundation, either version 3 of the License, or
+		(at your option) any later version.
+
+		This program is distributed in the hope that it will be useful,
+		but WITHOUT ANY WARRANTY.
+
+		You should have received a copy of the GNU General Public License
+		along with this program.  If not, see <https://www.gnu.org/licenses/>.
+		
+		KEY BINDINGS:
+		  $CONFIG_KEY_left $CONFIG_KEY_down $CONFIG_KEY_up $CONFIG_KEY_right   \
+move curser left, down, up, and right.
+		  SPC       switch current cell.
+		  $CONFIG_KEY_angel ${CONFIG_KEY_killer:=V}       \
+change cursor personality.
+		  $CONFIG_KEY_step $CONFIG_KEY_run       step/run.
+		  $CONFIG_KEY_info $CONFIG_KEY_help       display more info.
+		  $CONFIG_KEY_quit         quit.
+		[2;2H
+	EOF
+	_=$(dd count=1 2>/dev/null)
+	displaymap "$1"
+	displaycursor "$1" "$CONFIG_CHAR_cursor" "$cursory" "$cursorx"
+}
+
+main "$@"
