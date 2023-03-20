@@ -459,6 +459,7 @@ change cursor personality.
 		  $CONFIG_KEY_step $CONFIG_KEY_run       step/run.
 		  $CONFIG_KEY_info $CONFIG_KEY_help       display more info.
 		  $CONFIG_KEY_quit         quit.
+		Note: You can also use arrow keys to move.
 		[2;2H
 	EOF
 	_=$(dd count=1 2>/dev/null)
